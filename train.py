@@ -6,9 +6,7 @@ import tools
 import datetime
 import math
 
-
-
-batch_size = 1
+batch_size = 10
 summary_path = "./summary/"
 checkpoint_path = "./checkpoint/"
 EPOCHS = 26
