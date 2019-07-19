@@ -22,7 +22,7 @@ envarg = parser.add_argument_group('Training params')
 # BN params
 envarg.add_argument("--batch_norm_epsilon", type=float, default=1e-5, help="batch norm epsilon argument for batch normalization")
 envarg.add_argument('--batch_norm_decay', type=float, default=0.9997, help='batch norm decay argument for batch normalization.')
-envarg.add_argument('--freeze_batch_norm', type=bool, default=True,  help='Freeze batch normalization parameters during the training.')
+envarg.add_argument('--freeze_batch_norm', type=bool, default=False,  help='Freeze batch normalization parameters during the training.')
 # the number of classes
 envarg.add_argument("--number_of_classes", type=int, default=21, help="Number of classes to be predicted.")
 
@@ -92,7 +92,7 @@ def main():
         sess.run(init_op, feed_dict={is_train: True})
         ckpt = tf.train.get_checkpoint_state(checkpoint_path)
         if ckpt and ckpt.model_checkpoint_path:
-            saver.restore(sess, "./checkpoint/model.ckpt-26")
+            saver.restore(sess, ckpt.model_checkpoint_path)
         sess.graph.finalize()
 
         train_batches_of_epoch = int(math.ceil(train_set_length/batch_size))
@@ -127,7 +127,7 @@ def main():
                     [accuracy, mean_iou, summary_op],
                     feed_dict={x: img_batch, y: label_batch, is_train: False})
 
-                if (tag + 1) % 100 == 0:
+                if (tag + 1) % 500 == 0:
                     summary_writer_val.add_summary(merge, tag + 1)
                 test_acc += acc
                 test_miou += m_iou
