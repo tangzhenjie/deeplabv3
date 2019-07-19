@@ -6,7 +6,7 @@ import tools
 import datetime
 import math
 
-
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 batch_size = 10
 summary_path = "./summary/"
@@ -19,26 +19,32 @@ parser = argparse.ArgumentParser()
 
 #添加参数
 envarg = parser.add_argument_group('Training params')
+# BN params
 envarg.add_argument("--batch_norm_epsilon", type=float, default=1e-5, help="batch norm epsilon argument for batch normalization")
 envarg.add_argument('--batch_norm_decay', type=float, default=0.9997, help='batch norm decay argument for batch normalization.')
+envarg.add_argument('--freeze_batch_norm', type=bool, default=True,  help='Freeze batch normalization parameters during the training.')
+# the number of classes
 envarg.add_argument("--number_of_classes", type=int, default=21, help="Number of classes to be predicted.")
+
+# regularizer
 envarg.add_argument("--l2_regularizer", type=float, default=0.0001, help="l2 regularizer parameter.")
-envarg.add_argument('--starting_learning_rate', type=float, default=0.00001, help="initial learning rate.")
-envarg.add_argument('--learning_rate', type=float, default=0.00001, help="initial learning rate.")
+
+# for deeplabv3
 envarg.add_argument("--multi_grid", type=list, default=[1, 2, 4], help="Spatial Pyramid Pooling rates")
 envarg.add_argument("--output_stride", type=int, default=16, help="Spatial Pyramid Pooling rates")
-envarg.add_argument("--gpu_id", type=int, default=0, help="Id of the GPU to be used")
-envarg.add_argument("--crop_size", type=int, default=513, help="Image Cropsize.")
+
+# the base network
 envarg.add_argument("--resnet_model", default="resnet_v2_50", choices=["resnet_v2_50", "resnet_v2_101", "resnet_v2_152", "resnet_v2_200"], help="Resnet model to use as feature extractor. Choose one of: resnet_v2_50 or resnet_v2_101")
-envarg.add_argument('--learning_power', type=float, default=0.9, help='batch norm decay argument for batch normalization.')
-envarg.add_argument("--current_best_val_loss", type=int, default=99999, help="Best validation loss value.")
-envarg.add_argument("--accumulated_validation_miou", type=int, default=0, help="Accumulated validation intersection over union.")
+
+# the pre_trained model for example resnet50 101 and so on
 envarg.add_argument('--pre_trained_model', type=str, default='./pre_trained_model/resnet_v2_50/resnet_v2_50.ckpt',
                     help='Path to the pre-trained model checkpoint.')
+
+# max number of batch elements to tensorboard
 parser.add_argument('--tensorboard_images_max_outputs', type=int, default=6,
                     help='Max number of batch elements to generate for Tensorboard.')
 # poly learn_rate
-parser.add_argument('--initial_learning_rate', type=float, default=7e-3,
+parser.add_argument('--initial_learning_rate', type=float, default=7e-5,
                     help='Initial learning rate for the optimizer.')
 
 parser.add_argument('--end_learning_rate', type=float, default=1e-6,
@@ -60,27 +66,21 @@ def main():
     train_dataset = train_or_eval_input_fn(is_training=True,
                                            data_dir="./VOC2012_AUG/tfrecord/", batch_size=batch_size)
     eval_dataset = train_or_eval_input_fn(is_training=False,
-                                           data_dir="./VOC2012_AUG/tfrecord/", batch_size=1, num_epochs=1)
+                                           data_dir="./VOC2012_AUG/tfrecord/", batch_size=1)
     iterator_train = tf.data.Iterator.from_structure(train_dataset.output_types, train_dataset.output_shapes)
     next_batch = iterator_train.get_next()
     training_init_op = iterator_train.make_initializer(train_dataset)
     evaling_init_op = iterator_train.make_initializer(eval_dataset)
 
-    #iterator_eval = eval_dataset.make_one_shot_iterator()
-    #next_batch_val = iterator_eval.get_next()
-
     loss, train_op, predictions, metrics = tools.get_loss_pre_metrics(x, y, is_train, batch_size, args)
 
-    accuracy, accuracy_update = metrics["px_accuracy"]
-    mean_iou, mean_iou_update = metrics["mean_iou"]
-    train_mean_iou = metrics["train_mean_iou"]
+    accuracy = metrics["px_accuracy"]
+    mean_iou = metrics["mean_iou"]
     summary_op = tf.summary.merge_all()
     init_op = tf.group(
         tf.local_variables_initializer(),
         tf.global_variables_initializer()
     )
-
-
 
     saver = tf.train.Saver()
     summary_writer_train = tf.summary.FileWriter(summary_path + "train/")
@@ -92,10 +92,9 @@ def main():
         sess.run(init_op, feed_dict={is_train: True})
         ckpt = tf.train.get_checkpoint_state(checkpoint_path)
         if ckpt and ckpt.model_checkpoint_path:
-            saver.restore(sess, ckpt.model_checkpoint_path)
+            saver.restore(sess, "./checkpoint/model.ckpt-26")
         sess.graph.finalize()
 
-        eval_batches_of_epoch = int(math.ceil(eval_set_length / batch_size))
         train_batches_of_epoch = int(math.ceil(train_set_length/batch_size))
         for epoch in range(EPOCHS):
             sess.run(training_init_op)
@@ -104,36 +103,32 @@ def main():
             for step in range((epoch * train_batches_of_epoch), ((epoch + 1) * train_batches_of_epoch)):
                 img_batch, label_batch = sess.run(next_batch)
 
-                loss_value, _, acc, _, m_iou, _, train_miou, merge = sess.run(
-                    [loss, train_op, accuracy, accuracy_update, mean_iou, mean_iou_update, train_mean_iou, summary_op],
+                loss_value, _, acc, m_iou, merge = sess.run(
+                    [loss, train_op, accuracy, mean_iou, summary_op],
                     feed_dict={x: img_batch, y: label_batch, is_train: True})
 
-                if step % 20 == 0:
+                if (step + 1) % 100 == 0:
                     print("{} {} loss = {:.4f}".format(datetime.datetime.now(), step + 1, loss_value))
                     print("accuracy{}".format(acc))
                     print("miou{}".format(m_iou))
-                    print("train_miou{}".format(train_miou))
                     summary_writer_train.add_summary(merge, step + 1)
-                    # saver.save(sess, CHECKPOINT_DIR + "model.ckpt", step)
-                    # train_writer.add_summary(merge, epoch * train_batches_of_epoch + step)
-                    # print("checkpoint saved")
             saver.save(sess, checkpoint_path + "model.ckpt", epoch + 1)
             print("checkpoint saved")
 
             # 验证过程
+            sess.run(evaling_init_op)
             print("{} Start validation".format(datetime.datetime.now()))
             test_acc = 0.0
             test_miou = 0.0
             test_count = 0
-            sess.run(evaling_init_op)
-            for tag in range(eval_batches_of_epoch):
+            for tag in range(eval_set_length):
                 img_batch, label_batch = sess.run(next_batch)
-                # visit1_batch = np.tile(visit1_batch, (1, 1, 8))
-                # visit1_batch = np.reshape(visit1_batch, (-1, 182, 192, 1))
-                # visit1_batch = np.tile(visit1_batch, (1, 1, 1, 3))
-                acc, _, m_iou, _, train_miou, merge = sess.run(
-                    [accuracy, accuracy_update, mean_iou, mean_iou_update, train_mean_iou, summary_op],
+                acc, m_iou, merge = sess.run(
+                    [accuracy, mean_iou, summary_op],
                     feed_dict={x: img_batch, y: label_batch, is_train: False})
+
+                if (tag + 1) % 100 == 0:
+                    summary_writer_val.add_summary(merge, tag + 1)
                 test_acc += acc
                 test_miou += m_iou
                 test_count += 1

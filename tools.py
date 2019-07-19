@@ -32,6 +32,9 @@ def get_loss_pre_metrics(x, y, is_training, batch_size, args):
             true_fn=lambda: tf.py_func(preprocessing.decode_labels, [y, batch_size, args.number_of_classes], tf.uint8),
             false_fn=lambda: tf.py_func(preprocessing.decode_labels, [y, 1, args.number_of_classes], tf.uint8))
 
+    tf.summary.image('images', tf.concat(axis=2, values=[images, gt_decoded_labels, pred_decoded_labels]),
+                     max_outputs=args.tensorboard_images_max_outputs)
+
     # 求loss
     labels = tf.squeeze(y, axis=3)  # reduce the channel dimension.
     logits_by_num_classes = tf.reshape(logits, [-1, args.number_of_classes])
@@ -45,31 +48,28 @@ def get_loss_pre_metrics(x, y, is_training, batch_size, args):
 
     cross_entropy = tf.losses.sparse_softmax_cross_entropy(
         logits=logits_by_num_classes_new, labels=labels_flat_new)
-    train_var_list = [v for v in tf.trainable_variables()]
+
+    if not args.freeze_batch_norm:
+        train_var_list = [v for v in tf.trainable_variables()]
+    else:
+        train_var_list = [v for v in tf.trainable_variables()
+                          if 'beta' not in v.name and 'gamma' not in v.name]
+
+    #train_var_list = [v for v in tf.trainable_variables()]
     with tf.variable_scope("total_loss"):
         loss = cross_entropy + _WEIGHT_DECAY * tf.add_n(
             [tf.nn.l2_loss(v) for v in train_var_list])
     tf.summary.scalar('loss', loss)
-
-    # 求混淆矩阵
-    preds_flat = tf.reshape(pred_classes, [-1, ])
-    preds_flat_new = tf.dynamic_partition(preds_flat, valid_indices, num_partitions=2)[1]
-    confusion_matrix = tf.confusion_matrix(labels_flat_new, preds_flat_new, num_classes=args.number_of_classes)
-
-    predictions['confusion_matrix'] = confusion_matrix
-
-    tf.summary.image('images', tf.concat(axis=2, values=[images, gt_decoded_labels, pred_decoded_labels]),
-                                                max_outputs=args.tensorboard_images_max_outputs)
 
     # 优化函数
     global_step = tf.train.get_or_create_global_step()
     learning_rate = tf.train.polynomial_decay(
         args.initial_learning_rate,
         tf.cast(global_step, tf.int32) - args.initial_global_step,
-        args.max_iter, args.end_learning_rate, power=0.9)      #args.max_iter = 30000 args.initial_global_step=0
+        args.max_iter, args.end_learning_rate, power=0.9)  # args.max_iter = 30000 args.initial_global_step=0
     tf.summary.scalar('learning_rate', learning_rate)
 
-    optimizer = tf.train.MomentumOptimizer(learning_rate=learning_rate, momentum=0.9)
+    optimizer = tf.train.MomentumOptimizer(learning_rate=1e-6, momentum=0.9)
 
     # Batch norm requires update ops to be added as a dependency to the train_op
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
@@ -77,12 +77,15 @@ def get_loss_pre_metrics(x, y, is_training, batch_size, args):
         train_op = optimizer.minimize(loss, global_step, var_list=train_var_list)
 
     # metrics
-    accuracy = tf.metrics.accuracy(labels_flat_new, preds_flat_new)
-    mean_iou = tf.metrics.mean_iou(labels_flat_new, preds_flat_new, args.number_of_classes)
+    preds_flat = tf.reshape(pred_classes, [-1, ])
+    preds_flat_new = tf.dynamic_partition(preds_flat, valid_indices, num_partitions=2)[1]
+    confusion_matrix = tf.confusion_matrix(labels_flat_new, preds_flat_new, num_classes=args.number_of_classes)
 
+    predictions['confusion_matrix'] = confusion_matrix
 
-    tf.summary.scalar('accuracy', accuracy[0])
-    tf.summary.scalar('mean_iou', mean_iou[0])
+    correct_pred = tf.equal(preds_flat_new, labels_flat_new)
+    accuracy = tf.reduce_mean(tf.cast(correct_pred, tf.float32))
+    tf.summary.scalar('accuracy', accuracy)
 
     def compute_mean_iou(total_cm, name='mean_iou'):
         """Compute the mean intersection-over-union via the confusion matrix."""
@@ -116,10 +119,10 @@ def get_loss_pre_metrics(x, y, is_training, batch_size, args):
             0)
         return result
 
-    train_mean_iou = compute_mean_iou(mean_iou[1])
+    mean_iou = compute_mean_iou(confusion_matrix)
 
-    tf.summary.scalar('train_mean_iou', train_mean_iou)
+    tf.summary.scalar('mean_iou', mean_iou)
 
-    metrics = {'px_accuracy': accuracy, 'mean_iou': mean_iou, 'train_mean_iou': train_mean_iou}
+    metrics = {'px_accuracy': accuracy, 'mean_iou': mean_iou}
 
     return loss, train_op, predictions, metrics
