@@ -1,5 +1,5 @@
 # DeepLab-v3 Semantic Segmentation in TensorFlow
-##动机
+动机:
 本项目参照https://github.com/rishizek/tensorflow-deeplab-v3 的代码，使用tensorflow低阶api重新实现了一下。
 本项目的是：由于熟悉tensorflow低阶api而对estimator不是太熟悉。同时又想使用deeplabv3来分割自己的数据集。
 所以先保证deeplab实现的正确性。为以后使用打基础。
