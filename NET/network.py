@@ -1,5 +1,6 @@
 import tensorflow as tf
 from NET.resnet_v2 import resnet_utils, resnet_v2
+from NET.layers_utils.self_attention_layers import position_attention_module
 slim = tf.contrib.slim
 
 # ImageNet mean statistics
@@ -18,13 +19,15 @@ def atrous_spatial_pyramid_pooling(net, scope, depth=256, reuse=None):
     """
 
     with tf.variable_scope(scope, reuse=reuse):
-        feature_map_size = tf.shape(net)
-
+        #feature_map_size = tf.shape(net)
+        # position module
+        reduce_chanel = slim.conv2d(net, depth, [3, 3], scope="reduce_chanel", activation_fn=None)
+        position_feature = position_attention_module(reduce_chanel)
         # apply global average pooling
-        image_level_features = tf.reduce_mean(net, [1, 2], name='image_level_global_pool', keep_dims=True)
-        image_level_features = slim.conv2d(image_level_features, depth, [1, 1], scope="image_level_conv_1x1",
-                                           activation_fn=None)
-        image_level_features = tf.image.resize_bilinear(image_level_features, (feature_map_size[1], feature_map_size[2]))
+        #image_level_features = tf.reduce_mean(net, [1, 2], name='image_level_global_pool', keep_dims=True)
+        #image_level_features = slim.conv2d(image_level_features, depth, [1, 1], scope="image_level_conv_1x1",
+        #                                   activation_fn=None)
+        #image_level_features = tf.image.resize_bilinear(image_level_features, (feature_map_size[1], feature_map_size[2]))
 
         at_pool1x1 = slim.conv2d(net, depth, [1, 1], scope="conv_1x1_0", activation_fn=None)
 
@@ -34,7 +37,7 @@ def atrous_spatial_pyramid_pooling(net, scope, depth=256, reuse=None):
 
         at_pool3x3_3 = slim.conv2d(net, depth, [3, 3], scope="conv_3x3_3", rate=18, activation_fn=None)
 
-        net = tf.concat((image_level_features, at_pool1x1, at_pool3x3_1, at_pool3x3_2, at_pool3x3_3), axis=3,
+        net = tf.concat((position_feature, at_pool1x1, at_pool3x3_1, at_pool3x3_2, at_pool3x3_3), axis=3,
                         name="concat")
         net = slim.conv2d(net, depth, [1, 1], scope="conv_1x1_output", activation_fn=None)
         return net
